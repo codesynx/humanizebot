@@ -46,7 +46,7 @@ async def cmd_help(message: Message):
         "/cancel — отменить текущий заказ\n"
         "/help — справка\n"
         "\n"
-        "Отправь текст от 50 до 5 000 слов — бот рассчитает стоимость."
+        "Отправь текст от 134 до 5 000 слов — бот рассчитает стоимость."
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -54,4 +54,7 @@ async def cmd_help(message: Message):
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
+    # Also reset admin update flow if active
+    from handlers.admin import _reset_admin_update
+    _reset_admin_update()
     await message.answer("Отменено. Можешь отправить новый текст.")

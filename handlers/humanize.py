@@ -8,10 +8,15 @@ from aiogram.fsm.context import FSMContext
 from states import OrderStates
 from config import MIN_WORDS, MIN_ORDER_AMOUNT, MAX_WORDS, KASPI_NUMBER, KASPI_NAME, PAYMENT_TIMEOUT_MINUTES
 from services.word_counter import count_words, calculate_price, format_price
-from services.usage_tracker import can_process
+from services.usage_tracker import can_process, is_available
 from database.models import ensure_user, create_order
 
 router = Router()
+
+MAINTENANCE_MESSAGE = (
+    "Сейчас идут технические работы. Попробуй позже — "
+    "обычно это не занимает много времени."
+)
 
 SPLIT_MESSAGE_HINT = (
     "Похоже, Telegram разбил твой текст на несколько сообщений — "
@@ -145,6 +150,11 @@ def _cancel_pending(user_id: int):
 
 
 async def process_text(message: Message, state: FSMContext, text: str):
+    # Check if bot is available (not paused, enough words)
+    if not await is_available():
+        await message.answer(MAINTENANCE_MESSAGE)
+        return
+
     await ensure_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
 
     words = count_words(text)

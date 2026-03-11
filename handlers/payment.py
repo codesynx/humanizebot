@@ -32,6 +32,20 @@ async def handle_payment_screenshot(message: Message, state: FSMContext, bot: Bo
     await update_order_status(order_id, "paid")
     await state.set_state(OrderStates.pending_approval)
 
+    # Save screenshot info in FSM for potential error report later
+    if message.photo:
+        await state.update_data(
+            screenshot_file_id=message.photo[-1].file_id,
+            screenshot_type="photo",
+            username=message.from_user.username,
+        )
+    elif message.document:
+        await state.update_data(
+            screenshot_file_id=message.document.file_id,
+            screenshot_type="document",
+            username=message.from_user.username,
+        )
+
     username = f"@{message.from_user.username}" if message.from_user.username else "—"
 
     admin_text = (
