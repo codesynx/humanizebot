@@ -1,6 +1,7 @@
 from aiogram import Router, F, Bot
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.text_decorations import html_decoration
 
 from states import OrderStates
 from config import ADMIN_ID
@@ -9,6 +10,16 @@ from services.word_counter import format_price
 
 router = Router()
 
+PREVIEW_LENGTH = 300
+
+
+def _text_preview(text: str) -> str:
+    """First N chars of user text, escaped for HTML."""
+    preview = text[:PREVIEW_LENGTH]
+    if len(text) > PREVIEW_LENGTH:
+        preview += "..."
+    return html_decoration.quote(preview)
+
 
 @router.message(OrderStates.awaiting_payment, F.photo | F.document)
 async def handle_payment_screenshot(message: Message, state: FSMContext, bot: Bot):
@@ -16,6 +27,7 @@ async def handle_payment_screenshot(message: Message, state: FSMContext, bot: Bo
     order_id = data["order_id"]
     word_count = data["word_count"]
     price = data["price"]
+    text = data.get("text", "")
 
     await update_order_status(order_id, "paid")
     await state.set_state(OrderStates.pending_approval)
@@ -27,6 +39,9 @@ async def handle_payment_screenshot(message: Message, state: FSMContext, bot: Bo
         f"Пользователь: {username} (ID: <code>{message.from_user.id}</code>)\n"
         f"Слов: {word_count:,}\n"
         f"Сумма: {format_price(price)} ₸\n"
+        "\n"
+        f"<b>Превью текста:</b>\n"
+        f"<blockquote>{_text_preview(text)}</blockquote>\n"
         "\n"
         f"/approve_{order_id} — подтвердить\n"
         f"/reject_{order_id} — отклонить"

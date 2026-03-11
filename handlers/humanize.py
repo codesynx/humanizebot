@@ -1,3 +1,4 @@
+import asyncio
 import io
 
 from aiogram import Router, F, Bot
@@ -12,9 +13,6 @@ from database.models import ensure_user, create_order
 
 router = Router()
 
-# Telegram splits messages at exactly 4096 characters
-TELEGRAM_MSG_LIMIT = 4096
-
 SPLIT_MESSAGE_HINT = (
     "Похоже, Telegram разбил твой текст на несколько сообщений — "
     "бот может обработать только одно.\n"
@@ -28,6 +26,11 @@ UNSUPPORTED_FORMAT_HINT = (
     "Как: открой документ → выдели всё → скопируй в текстовый файл (.txt) → отправь сюда."
 )
 
+# Debounce: per-user pending tasks to catch Telegram message splits
+_pending_tasks: dict[int, asyncio.Task] = {}
+_pending_messages: dict[int, Message] = {}
+_pending_states: dict[int, FSMContext] = {}
+
 
 @router.message(F.document)
 async def handle_document(message: Message, state: FSMContext, bot: Bot):
@@ -36,6 +39,9 @@ async def handle_document(message: Message, state: FSMContext, bot: Bot):
     # In awaiting_payment state, documents go to payment handler (screenshot)
     if current_state == OrderStates.awaiting_payment.state:
         return
+
+    # Cancel any pending debounce — user switched to file upload
+    _cancel_pending(message.from_user.id)
 
     doc = message.document
     filename = (doc.file_name or "").lower()
@@ -74,6 +80,7 @@ async def handle_document(message: Message, state: FSMContext, bot: Bot):
 @router.message(F.text, ~F.text.startswith("/"))
 async def handle_text(message: Message, state: FSMContext):
     current_state = await state.get_state()
+    user_id = message.from_user.id
 
     # Silently ignore further fragments after split was detected
     if current_state == OrderStates.split_detected.state:
@@ -105,14 +112,36 @@ async def handle_text(message: Message, state: FSMContext):
             await message.answer(SPLIT_MESSAGE_HINT, parse_mode="HTML")
             return
 
-    # Detect split message: Telegram cuts at exactly 4096 chars
-    if len(message.text) == TELEGRAM_MSG_LIMIT:
+    # New text in idle state — debounce to catch split messages
+    if user_id in _pending_tasks:
+        # Second+ fragment arrived → it's a split
+        _cancel_pending(user_id)
         await state.set_state(OrderStates.split_detected)
         await message.answer(SPLIT_MESSAGE_HINT, parse_mode="HTML")
         return
 
-    # New text — process it
-    await process_text(message, state, message.text.strip())
+    # First message — wait 1.5s for potential other fragments
+    _pending_messages[user_id] = message
+    _pending_states[user_id] = state
+
+    async def delayed_process():
+        await asyncio.sleep(1.5)
+        # If we got here, no more fragments arrived
+        msg = _pending_messages.pop(user_id, None)
+        st = _pending_states.pop(user_id, None)
+        _pending_tasks.pop(user_id, None)
+        if msg and st:
+            await process_text(msg, st, msg.text.strip())
+
+    _pending_tasks[user_id] = asyncio.create_task(delayed_process())
+
+
+def _cancel_pending(user_id: int):
+    task = _pending_tasks.pop(user_id, None)
+    if task:
+        task.cancel()
+    _pending_messages.pop(user_id, None)
+    _pending_states.pop(user_id, None)
 
 
 async def process_text(message: Message, state: FSMContext, text: str):
