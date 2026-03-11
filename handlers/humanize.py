@@ -12,6 +12,9 @@ from database.models import ensure_user, create_order
 
 router = Router()
 
+# Telegram splits messages at exactly 4096 characters
+TELEGRAM_MSG_LIMIT = 4096
+
 SPLIT_MESSAGE_HINT = (
     "Похоже, Telegram разбил твой текст на несколько сообщений — "
     "бот может обработать только одно.\n"
@@ -54,6 +57,7 @@ async def handle_document(message: Message, state: FSMContext, bot: Bot):
             await message.answer("Файл пустой. Отправь файл с текстом.")
             return
 
+        await state.clear()
         await process_text(message, state, text)
         return
 
@@ -70,6 +74,10 @@ async def handle_document(message: Message, state: FSMContext, bot: Bot):
 @router.message(F.text, ~F.text.startswith("/"))
 async def handle_text(message: Message, state: FSMContext):
     current_state = await state.get_state()
+
+    # Silently ignore further fragments after split was detected
+    if current_state == OrderStates.split_detected.state:
+        return
 
     # If user is in the middle of a flow, redirect
     if current_state == OrderStates.awaiting_payment.state:
@@ -92,13 +100,16 @@ async def handle_text(message: Message, state: FSMContext):
             await message.answer("Отменено. Можешь отправить новый текст.")
             return
         else:
-            # Long text in text_received = Telegram split the message
-            if len(message.text.strip()) > 30:
-                await state.clear()
-                await message.answer(SPLIT_MESSAGE_HINT, parse_mode="HTML")
-                return
-            await message.answer('Отправь "Да" чтобы продолжить или "Отмена" чтобы отказаться.')
+            # Any non-confirmation text while in text_received = split fragment
+            await state.set_state(OrderStates.split_detected)
+            await message.answer(SPLIT_MESSAGE_HINT, parse_mode="HTML")
             return
+
+    # Detect split message: Telegram cuts at exactly 4096 chars
+    if len(message.text) == TELEGRAM_MSG_LIMIT:
+        await state.set_state(OrderStates.split_detected)
+        await message.answer(SPLIT_MESSAGE_HINT, parse_mode="HTML")
+        return
 
     # New text — process it
     await process_text(message, state, message.text.strip())
