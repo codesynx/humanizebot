@@ -78,3 +78,33 @@ async def get_pending_orders_by_user(user_id: int) -> list[dict]:
     )
     rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+async def get_user_orders(user_id: int, limit: int = 10) -> list[dict]:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, word_count, price, status, created_at FROM orders "
+        "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        (user_id, limit),
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_user_summary(user_id: int) -> dict:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT total_words_used, total_paid FROM users WHERE user_id = ?",
+        (user_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return {"total_words_used": 0, "total_paid": 0.0}
+    return dict(row)
+
+
+async def get_all_user_ids() -> list[int]:
+    db = await get_db()
+    cursor = await db.execute("SELECT user_id FROM users")
+    rows = await cursor.fetchall()
+    return [row["user_id"] for row in rows]
