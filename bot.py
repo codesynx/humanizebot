@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand
 
 from config import BOT_TOKEN, PAYMENT_TIMEOUT_MINUTES
 from database.db import get_db, close_db
@@ -76,6 +77,14 @@ async def main():
 
     # Init DB
     await get_db()
+
+    # Set bot command menu (visible in Telegram's left menu)
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Начать сначала"),
+        BotCommand(command="myorders", description="Мои заказы"),
+        BotCommand(command="help", description="Справка"),
+        BotCommand(command="cancel", description="Отменить текущий заказ"),
+    ])
 
     # Start timeout checker
     asyncio.create_task(timeout_checker(bot, storage))

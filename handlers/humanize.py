@@ -2,7 +2,7 @@ import asyncio
 import io
 
 from aiogram import Router, F, Bot
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
 from states import OrderStates
@@ -102,20 +102,10 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("Текст обрабатывается. Подожди немного.")
         return
 
-    # Handle confirmation in text_received state
+    # In text_received state, user should use inline buttons
     if current_state == OrderStates.text_received.state:
-        text_lower = message.text.strip().lower()
-        if text_lower in ("да", "yes", "ок", "ok"):
-            return await confirm_order(message, state)
-        elif text_lower in ("отмена", "нет", "cancel", "no"):
-            await state.clear()
-            await message.answer("Отменено. Можешь отправить новый текст.")
-            return
-        else:
-            # Any non-confirmation text while in text_received = split fragment
-            await state.set_state(OrderStates.split_detected)
-            await message.answer(SPLIT_MESSAGE_HINT, parse_mode="HTML")
-            return
+        await message.answer("Используй кнопки выше для подтверждения или отмены.")
+        return
 
     # New text in idle state — debounce to catch split messages
     if user_id in _pending_tasks:
@@ -182,22 +172,68 @@ async def process_text(message: Message, state: FSMContext, text: str):
     await state.set_state(OrderStates.text_received)
     await state.update_data(text=text, word_count=words, price=price)
 
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Оплатить", callback_data="order_confirm"),
+            InlineKeyboardButton(text="Отмена", callback_data="order_cancel"),
+        ]
+    ])
+
     await message.answer(
         f"<b>Слов в тексте:</b> {words:,}\n"
         f"<b>Стоимость:</b> {format_price(price)} ₸\n"
         "\n"
         "——————————————————\n"
-        'Отправь "Да" чтобы продолжить или "Отмена" чтобы отказаться.',
+        "Нажми кнопку ниже, чтобы продолжить.",
         parse_mode="HTML",
+        reply_markup=keyboard,
     )
 
 
-async def confirm_order(message: Message, state: FSMContext):
+@router.callback_query(F.data == "order_confirm")
+async def cb_order_confirm(callback: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state != OrderStates.text_received.state:
+        await callback.answer("Это действие уже неактуально.")
+        return
+
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await confirm_order(callback.message, state, callback.from_user.id)
+
+
+@router.callback_query(F.data == "order_cancel")
+async def cb_order_cancel(callback: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state != OrderStates.text_received.state:
+        await callback.answer("Это действие уже неактуально.")
+        return
+
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await state.clear()
+    await callback.message.answer("Отменено. Можешь отправить новый текст.")
+
+
+@router.callback_query(F.data == "cancel_payment")
+async def cb_cancel_payment(callback: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state != OrderStates.awaiting_payment.state:
+        await callback.answer("Это действие уже неактуально.")
+        return
+
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await state.clear()
+    await callback.message.answer("Заказ отменён. Можешь отправить новый текст.")
+
+
+async def confirm_order(message: Message, state: FSMContext, user_id: int):
     data = await state.get_data()
     price = data["price"]
 
     order_id = await create_order(
-        user_id=message.from_user.id,
+        user_id=user_id,
         text=data["text"],
         word_count=data["word_count"],
         price=price,
@@ -206,6 +242,10 @@ async def confirm_order(message: Message, state: FSMContext):
     await state.set_state(OrderStates.awaiting_payment)
     await state.update_data(order_id=order_id)
 
+    cancel_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Отменить заказ", callback_data="cancel_payment")]
+    ])
+
     await message.answer(
         f"Переведи <b>{format_price(price)} ₸</b> на Каспи:\n"
         f"<code>{KASPI_NUMBER}</code>  ({KASPI_NAME})\n"
@@ -213,4 +253,5 @@ async def confirm_order(message: Message, state: FSMContext):
         "После оплаты отправь скриншот чека сюда.\n"
         f"На оплату — {PAYMENT_TIMEOUT_MINUTES} минут.",
         parse_mode="HTML",
+        reply_markup=cancel_keyboard,
     )

@@ -10,7 +10,7 @@ from aiogram.utils.text_decorations import html_decoration
 
 from config import ADMIN_ID, LOW_WORDS_THRESHOLD
 from states import OrderStates
-from database.models import get_order, update_order_status, update_user_stats, get_monthly_stats
+from database.models import get_order, update_order_status, update_user_stats, get_monthly_stats, get_all_user_ids
 from services.humanizer_api import humanize_text, HumanizerAPIError
 from services.usage_tracker import (
     add_usage, get_remaining_words,
@@ -23,8 +23,9 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-# Simple flag for admin /update flow (no FSM needed — single admin)
+# Simple flags for admin flows (no FSM needed — single admin)
 _awaiting_word_update = False
+_awaiting_broadcast = False
 
 
 def is_admin(message: Message) -> bool:
@@ -32,8 +33,9 @@ def is_admin(message: Message) -> bool:
 
 
 def _reset_admin_update():
-    global _awaiting_word_update
+    global _awaiting_word_update, _awaiting_broadcast
     _awaiting_word_update = False
+    _awaiting_broadcast = False
 
 
 async def _notify_admin_low_limit(bot: Bot):
@@ -313,5 +315,71 @@ async def cmd_remaining(message: Message):
 
     remaining = await get_remaining_words()
     await message.answer(f"Осталось слов в лимите: <b>{remaining:,}</b>", parse_mode="HTML")
+
+
+@router.message(F.text == "/broadcast")
+async def cmd_broadcast(message: Message):
+    global _awaiting_broadcast
+    if not is_admin(message):
+        return
+    _awaiting_broadcast = True
+    await message.answer(
+        "Отправь сообщение для рассылки.\n"
+        "Можно отправить текст, фото с подписью, или фото без подписи.\n"
+        "/cancel — отмена."
+    )
+
+
+@router.message(F.photo)
+async def handle_broadcast_photo(message: Message, bot: Bot):
+    global _awaiting_broadcast
+    if not is_admin(message):
+        return
+    if not _awaiting_broadcast:
+        return
+
+    _awaiting_broadcast = False
+    user_ids = await get_all_user_ids()
+    photo = message.photo[-1].file_id
+    caption = message.caption or ""
+
+    sent, failed = 0, 0
+    for uid in user_ids:
+        try:
+            await bot.send_photo(uid, photo=photo, caption=caption, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)  # avoid hitting Telegram rate limits
+
+    await message.answer(f"Рассылка завершена. Доставлено: {sent}, не доставлено: {failed}.")
+
+
+@router.message(F.text & ~F.text.startswith("/"))
+async def handle_broadcast_text(message: Message, bot: Bot):
+    global _awaiting_broadcast
+    if not is_admin(message):
+        return
+    if not _awaiting_broadcast:
+        return
+
+    # Don't intercept number input for /update flow
+    if _awaiting_word_update:
+        return
+
+    _awaiting_broadcast = False
+    user_ids = await get_all_user_ids()
+    text = message.text
+
+    sent, failed = 0, 0
+    for uid in user_ids:
+        try:
+            await bot.send_message(uid, text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    await message.answer(f"Рассылка завершена. Доставлено: {sent}, не доставлено: {failed}.")
 
 

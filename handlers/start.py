@@ -3,7 +3,8 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
-from database.models import ensure_user
+from database.models import ensure_user, get_user_orders, get_user_summary
+from services.word_counter import format_price
 
 router = Router()
 
@@ -49,6 +50,41 @@ async def cmd_help(message: Message):
         "Отправь текст от 134 до 5 000 слов — бот рассчитает стоимость."
     )
     await message.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("myorders"))
+async def cmd_myorders(message: Message):
+    summary = await get_user_summary(message.from_user.id)
+    orders = await get_user_orders(message.from_user.id, limit=10)
+
+    if not orders:
+        await message.answer("У тебя пока нет заказов. Отправь текст, чтобы начать.")
+        return
+
+    status_labels = {
+        "pending": "ожидание",
+        "paid": "оплачен",
+        "completed": "выполнен",
+        "rejected": "отклонён",
+        "expired": "истёк",
+    }
+
+    lines = [
+        f"<b>Всего слов:</b> {summary['total_words_used']:,}",
+        f"<b>Всего оплачено:</b> {format_price(summary['total_paid'])} ₸",
+        "",
+        "<b>Последние заказы:</b>",
+    ]
+
+    for o in orders:
+        status = status_labels.get(o["status"], o["status"])
+        date = o["created_at"][:10] if o["created_at"] else "—"
+        lines.append(
+            f"  #{o['id']}  {o['word_count']:,} слов  "
+            f"{format_price(o['price'])} ₸  [{status}]  {date}"
+        )
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("cancel"))
