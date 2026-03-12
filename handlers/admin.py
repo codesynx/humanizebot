@@ -330,13 +330,13 @@ async def cmd_broadcast(message: Message):
     )
 
 
-@router.message(F.photo)
+def _broadcast_photo_filter(message: Message) -> bool:
+    return message.from_user.id == ADMIN_ID and _awaiting_broadcast
+
+
+@router.message(F.photo, _broadcast_photo_filter)
 async def handle_broadcast_photo(message: Message, bot: Bot):
     global _awaiting_broadcast
-    if not is_admin(message):
-        return
-    if not _awaiting_broadcast:
-        return
 
     _awaiting_broadcast = False
     user_ids = await get_all_user_ids()
@@ -355,17 +355,13 @@ async def handle_broadcast_photo(message: Message, bot: Bot):
     await message.answer(f"Рассылка завершена. Доставлено: {sent}, не доставлено: {failed}.")
 
 
-@router.message(F.text & ~F.text.startswith("/"))
+def _broadcast_text_filter(message: Message) -> bool:
+    return message.from_user.id == ADMIN_ID and _awaiting_broadcast and not _awaiting_word_update
+
+
+@router.message(F.text, ~F.text.startswith("/"), _broadcast_text_filter)
 async def handle_broadcast_text(message: Message, bot: Bot):
     global _awaiting_broadcast
-    if not is_admin(message):
-        return
-    if not _awaiting_broadcast:
-        return
-
-    # Don't intercept number input for /update flow
-    if _awaiting_word_update:
-        return
 
     _awaiting_broadcast = False
     user_ids = await get_all_user_ids()
